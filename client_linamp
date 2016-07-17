@@ -1,0 +1,10 @@
+#!/bin/bash
+
+if [ -z $1 ]; then
+	echo "Usage ./client_linamp <operand>"
+fi
+if [ $1 == 'play' ]; then
+	echo "PLAY" > linamp_fifo
+elif [ $1 == 'pause' ]; then
+	echo "PAUS" > linamp_fifo
+fi
