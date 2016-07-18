@@ -1,16 +1,24 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <fcntl.h>
 #include <string.h>
 #include <gst/gst.h>
 #include <glib.h>
+#include <dirent.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 
 #define IPC_FIFO "linamp_fifo"
 
+struct playlist_t {
+	char *song;
+	/* next */
+} playlist_t;
+
 static gboolean bus_call(GstBus *bus, GstMessage *msg, gpointer data)
 {
 	GMainLoop *loop = (GMainLoop *) data;
+
 
 	switch (GST_MESSAGE_TYPE(msg)) {
 		case GST_MESSAGE_EOS:
@@ -27,6 +35,8 @@ static gboolean bus_call(GstBus *bus, GstMessage *msg, gpointer data)
 
 	return TRUE;
 }
+
+
 
 int play_song(char *location, GstElement *pipeline, GMainLoop *loop)
 {
@@ -45,7 +55,8 @@ int play_song(char *location, GstElement *pipeline, GMainLoop *loop)
 
 	return 0;
 }
-int play_pause(GIOChannel *src, GIOCondition cond, gpointer data)
+
+gboolean play_pause(GIOChannel *src, GIOCondition cond, gpointer data)
 {
 	GstElement *pipeline = (GstElement *) data;
 	gchar buff[4];
@@ -73,6 +84,21 @@ int play_pause(GIOChannel *src, GIOCondition cond, gpointer data)
 
 int main(int argc, char *argv[])
 {
+	char *filename;
+	if (argc > 2 && (strcmp(argv[1], "-d") == 0)) {
+		/* Directory */
+
+		printf("Dir\n");
+		exit(0);
+	} else if (argc > 2 && (strcmp(argv[1], "-p") == 0)) {
+		/* File with song paths */
+		printf("File\n");
+		exit(0);
+	} else {
+		/* Single song */
+		filename = argv[1];
+	}
+
 	GMainLoop *loop;
 	GstElement *pipeline;
 	gst_init(&argc, &argv);
@@ -95,7 +121,7 @@ int main(int argc, char *argv[])
 	GIOChannel *io = g_io_channel_unix_new(fp);
 	g_io_add_watch(io, G_IO_IN, play_pause, pipeline);
 
-	play_song(argv[1], pipeline, loop);
+	play_song(filename, pipeline, loop);
 	printf("Now playing: %s\n", argv[1]);
 
 	g_main_loop_run(loop);
