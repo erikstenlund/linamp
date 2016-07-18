@@ -10,6 +10,7 @@
  */
 
 
+#include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <fcntl.h>
@@ -107,7 +108,7 @@ gboolean play_pause(GIOChannel *src, GIOCondition cond, gpointer data)
 	g_io_channel_read_chars (src, buff, 4, &read, NULL);
 
 #ifdef DEBUG
-	printf("Buff: %s\n", buff);
+	printf("Buff: %s, Strcmp(buff, PAUS): %d\n", buff, strcmp(buff, "PAUS"));
 #endif
 
 	if (strcmp(buff, "PAUS") == 0) {
@@ -188,6 +189,21 @@ int main(int argc, char *argv[])
 	bus_call_args_t args = {loop, pipeline, &playlist };
 	bus_watch_id = gst_bus_add_watch(bus, bus_call, &args);
 	gst_object_unref(bus);
+
+	/* IPC using python gui */
+	int fd[2];
+	pipe(fd);
+	pid_t pid = fork();
+	if (pid == 0) {
+		close(fd[0]);
+		dup2(fd[1], 1);
+
+		execl("./py_client.py", "./py_client.py", NULL);
+	} else {
+		close(fd[1]);
+	}
+	GIOChannel *io1 = g_io_channel_unix_new(fd[0]);
+	g_io_add_watch(io1, G_IO_IN, play_pause, pipeline);
 
 
 	/* IPC using fifo */
