@@ -1,3 +1,15 @@
+/*
+ * """"""" LINAMP """""""""""""""
+ * Simple mp3 player using Gstreamer.
+ *
+ * Usage:
+ *	./linamp <filename> - Plays the provided file
+ *	./linamp -p <filename> - Plays the files in the provided file
+ *	./linamp -d <filename> - Plays the files in the provided directory
+ *
+ */
+
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <fcntl.h>
@@ -10,20 +22,40 @@
 
 #define IPC_FIFO "linamp_fifo"
 
-struct playlist_t {
+typedef struct playlist_t {
 	char *song;
-	/* next */
+	struct playlist_t *next;
 } playlist_t;
+
+typedef struct bus_call_args_t {
+	GMainLoop *loop;
+	GstElement *pipeline;
+	playlist_t *playlist;
+} bus_call_args_t;
+
+int play_song(char *location, GstElement *pipeline);
 
 static gboolean bus_call(GstBus *bus, GstMessage *msg, gpointer data)
 {
-	GMainLoop *loop = (GMainLoop *) data;
-
+	bus_call_args_t *args = (bus_call_args_t *) data;
+	playlist_t *playlist = args->playlist;
+	GMainLoop *loop = args->loop;
+	GstElement *pipeline = args->pipeline;
 
 	switch (GST_MESSAGE_TYPE(msg)) {
 		case GST_MESSAGE_EOS:
-
-			g_main_loop_quit(loop);
+			if (playlist->next == NULL) {
+				g_main_loop_quit(loop);
+			} else {
+				/*
+				 * ToDo:
+				 * Fulhack, fixa snyggare genomgang av
+				 * playlisten
+				 * */
+				playlist->song = playlist->next->song;
+				playlist->next = playlist->next->next;
+				play_song(playlist->song, pipeline);
+			}
 			break;
 		case GST_MESSAGE_ERROR:
 
@@ -36,9 +68,7 @@ static gboolean bus_call(GstBus *bus, GstMessage *msg, gpointer data)
 	return TRUE;
 }
 
-
-
-int play_song(char *location, GstElement *pipeline, GMainLoop *loop)
+int init_player(GstElement *pipeline)
 {
 	GstElement *src, *mad, *sink;
 
@@ -46,12 +76,24 @@ int play_song(char *location, GstElement *pipeline, GMainLoop *loop)
 	mad = gst_element_factory_make("mad", "mp3-audio-demuxer");
 	sink = gst_element_factory_make("alsasink", "audio-output");
 
-	g_object_set(G_OBJECT(src), "location", location, NULL);
-
 	gst_bin_add_many(GST_BIN(pipeline), src, mad, sink, NULL);
 	gst_element_link_many(src, mad, sink, NULL);
+	return 0;
+}
+
+int play_song(char *location, GstElement *pipeline)
+{
+	gst_element_set_state(pipeline, GST_STATE_NULL);
+
+	GstElement *src = gst_bin_get_by_name(GST_BIN(pipeline), "file-source");
+	if (!src) {
+		printf("Not initialized pipeline, call init_player first");
+		exit(0);
+	}
+	g_object_set(G_OBJECT(src), "location", location, NULL);
 
 	gst_element_set_state(pipeline, GST_STATE_PLAYING);
+	printf("Now playing: %s\n", location);
 
 	return 0;
 }
@@ -84,7 +126,7 @@ gboolean play_pause(GIOChannel *src, GIOCondition cond, gpointer data)
 
 int main(int argc, char *argv[])
 {
-	char *filename;
+	playlist_t playlist;
 	if (argc > 2 && (strcmp(argv[1], "-d") == 0)) {
 		/* Directory */
 
@@ -92,11 +134,43 @@ int main(int argc, char *argv[])
 		exit(0);
 	} else if (argc > 2 && (strcmp(argv[1], "-p") == 0)) {
 		/* File with song paths */
-		printf("File\n");
-		exit(0);
+
+		/*
+		 * ToDo
+		 * Refactor v
+		 */
+		char *song = malloc(sizeof(char) * 100); // Find max filelen
+		size_t len, read;
+		playlist_t *prev;
+		FILE* fp = fopen(argv[2], "r");
+		if ((read = getline(&song, &len, fp)) != -1) {
+			playlist.song = malloc(sizeof(char) * (read + 1));
+			strcpy(playlist.song, song);
+			playlist.song[read - 1] = '\0';
+			playlist.next = NULL;
+			prev = &playlist;
+			while ((read = getline(&song, &len, fp)) != -1) {
+				playlist_t *new = malloc(sizeof(playlist_t));
+				new->song = malloc(sizeof(char) * (read + 1));
+				strcpy(new->song, song);
+				new->song[read - 1] = '\0';
+				new->next = NULL;
+				prev->next = new;
+				prev = new;
+			}
+#ifdef DEBUG
+			playlist_t *p = &playlist;
+			while (p) {
+				printf("%s\n", p->song);
+				p = p->next;
+			}
+#endif
+		}
+
 	} else {
 		/* Single song */
-		filename = argv[1];
+		playlist.song = argv[1];
+		playlist.next = NULL;
 	}
 
 	GMainLoop *loop;
@@ -111,22 +185,29 @@ int main(int argc, char *argv[])
 
 	/* Message handler */
 	bus = gst_pipeline_get_bus(GST_PIPELINE (pipeline));
-	bus_watch_id = gst_bus_add_watch(bus, bus_call, loop);
+	bus_call_args_t args = {loop, pipeline, &playlist };
+	bus_watch_id = gst_bus_add_watch(bus, bus_call, &args);
 	gst_object_unref(bus);
 
 
 	/* IPC using fifo */
-	int fp;
-	fp = open(IPC_FIFO, O_RDONLY | O_NONBLOCK);
+	int fp = open(IPC_FIFO, O_RDONLY | O_NONBLOCK);
 	GIOChannel *io = g_io_channel_unix_new(fp);
 	g_io_add_watch(io, G_IO_IN, play_pause, pipeline);
 
-	play_song(filename, pipeline, loop);
-	printf("Now playing: %s\n", argv[1]);
+	init_player(pipeline);
+	play_song(playlist.song, pipeline);
 
 	g_main_loop_run(loop);
 
 	/* Clean up */
+
+	/*
+	 * ToDo
+	 * Minnet från playlisten måste städas upp antingen här eller i bus_call
+	 * nu läcker det minne
+	 */
+
 	gst_element_set_state(pipeline, GST_STATE_NULL);
 	gst_object_unref(pipeline);
 	g_source_remove(bus_watch_id);
